@@ -122,9 +122,30 @@ You can host this project yourself — just give proper credit by linking to thi
 ---
 
 <p align="center">
-  Made with ❤️ by <a href="https://github.com/Sandipeyy">Sandipeyy</a>  
-  •  
+  Made with ❤️ by <a href="https://github.com/Sandipeyy">Sandipeyy</a>
+  •
   <a href="mailto:contact.nepoflix@gmail.com">contact.nepoflix@gmail.com</a>
 </p>
+
+---
+
+## 🚀 Deploying on Vercel
+
+This repository includes configuration for hosting on [Vercel](https://vercel.com).
+
+1. Install dependencies and build the frontend:
+   ```bash
+   npm install
+   npm run build
+   ```
+2. Deploy using the Vercel CLI:
+   ```bash
+   npm i -g vercel
+   vercel
+   vercel --prod
+   ```
+
+The static site is served from the `dist/` directory and proxy logic is handled
+via serverless functions in the `api/` folder.
 
 </div>
