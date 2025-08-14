@@ -1,3 +1,5 @@
+// src/pages/details/Details.jsx
+
 import React, { useState, useEffect } from 'react';
 import { useParams, useLocation, useSearchParams } from 'react-router-dom';
 import { fetchTmdb, getTmdbImage, formatReleaseDate, getContentRating, isInWatchlist, toggleWatchlist } from '../../utils.jsx';

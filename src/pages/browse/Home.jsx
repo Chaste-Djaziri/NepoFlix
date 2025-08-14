@@ -226,9 +226,20 @@ const Home = () => {
   } = useHomeStore();
 
   const [isQuickSearchOpen, setIsQuickSearchOpen] = useState(false);
+  const [showFirstVisitPopup, setShowFirstVisitPopup] = useState(false);
+  const navigate = useNavigate();
 
   const handleQuickSearchOpen = () => setIsQuickSearchOpen(true);
   const handleQuickSearchClose = () => setIsQuickSearchOpen(false);
+
+  // First-visit pop-up logic
+  useEffect(() => {
+    const hasVisited = localStorage.getItem('visited_skip_times');
+    if (!hasVisited) {
+      setShowFirstVisitPopup(true);
+      localStorage.setItem('visited_skip_times', 'true');
+    }
+  }, []);
 
   // Compute Continue Watching on mount (local only; no network)
   useEffect(() => {
@@ -319,6 +330,36 @@ const Home = () => {
   return (
     <div className="min-h-screen bg-[#090a0a] pb-12 md:pb-0">
       <Header />
+
+      {/* First Visit Pop-up */}
+      {showFirstVisitPopup && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="bg-[#1e1e1e] p-6 rounded-xl max-w-sm w-full text-white shadow-xl border border-white/10">
+            <h2 className="text-lg font-bold mb-3">Help us add Skip Times</h2>
+            <p className="text-sm text-neutral-300 mb-5">
+              Want to improve the viewing experience for everyone? You can help by adding intro/credits
+              skip times for movies and TV episodes.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setShowFirstVisitPopup(false)}
+                className="px-4 py-2 bg-white/10 rounded-lg hover:bg-white/20 transition-colors"
+              >
+                Not now
+              </button>
+              <button
+                onClick={() => {
+                  setShowFirstVisitPopup(false);
+                  navigate('/marker');
+                }}
+                className="px-4 py-2 bg-emerald-500 text-black font-semibold rounded-lg hover:bg-emerald-400 transition-colors"
+              >
+                Create skip times
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <SpotlightSection
         item={spotlightItem}

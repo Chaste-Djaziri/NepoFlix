@@ -1,7 +1,7 @@
 {
-    "skipMarkerApi": "http://localhost:3001",
+    "skipMarkerApi": "https://nepo-flix-v2-y5as.vercel.app",
     "proxy": "/proxy",
-    "m3u8proxy": "/m3u8proxy",
+    "m3u8proxy": "https://nepo-flix-v2-ssar.vercel.app",
     "tmdbApiKey": "Bearer eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiI3MmJhMTBjNDI5OTE0MTU3MzgwOGQyNzEwNGVkMThmYSIsInN1YiI6IjY0ZjVhNTUwMTIxOTdlMDBmZWE5MzdmMSIsInNjb3BlcyI6WyJhcGlfcmVhZCJdLCJ2ZXJzaW9uIjoxfQ.84b7vWpVEilAbly4RpS01E9tyirHdhSXjcpfmTczI3Q",
     "tmdbBaseUrl": "https://api.themoviedb.org/3",
     "tmdbImageBaseUrl": "https://image.tmdb.org/t/p/",

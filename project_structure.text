@@ -1792,12 +1792,18 @@
 - jsconfig.json
 - package-lock.json
 - package.json
+- project_structure.text
 - public
   - icons
     - back10.svg
     - forwards10.svg
   - logo.png
   - logow.png
+- skip-marker-backend
+  - .env
+  - index.js
+  - package-lock.json
+  - package.json
 - src
   - components
     - Footer.jsx
@@ -1835,6 +1841,8 @@
     - ui
       - dropdown-menu.jsx
   - config.json
+  - hooks
+    - useSkipMarker.js
   - lib
     - utils.js
   - logo.png
@@ -1842,7 +1850,6 @@
   - manifest.json
   - pages
     - 404.jsx
-    - OpenSource.jsx
     - Search.jsx
     - Watchlist.jsx
     - anime
@@ -1853,6 +1860,7 @@
     - browse
       - Filter.jsx
       - Home.jsx
+      - Marker.jsx
       - Movies.jsx
       - Tv.jsx
     - details
@@ -1868,6 +1876,13 @@
     - misc
       - Ios.jsx
   - router.jsx
+  - store
+    - filterStore.js
+    - homeStore.js
+    - moviesStore.js
+    - searchStore.js
+    - tvStore.js
+    - watchlistStore.js
   - styles
     - animations.css
     - index.css

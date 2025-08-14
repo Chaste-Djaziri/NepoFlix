@@ -5,22 +5,54 @@ const cors = require('cors');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+
+// ---------- CORS ----------
+const parseAllowedOrigins = (v) =>
+  (v || '')
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
+// Example: ALLOWED_ORIGINS=https://nepo-flix-v2-y5as.vercel.app,http://localhost:5173
+const ALLOWED = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+
+// If no allowlist is configured, default to "*" (useful for local dev)
+const corsOptionsDelegate = (req, cb) => {
+  let corsOptions;
+  if (!ALLOWED.length) {
+    corsOptions = { origin: true }; // reflect request origin
+  } else {
+    const origin = req.header('Origin');
+    const allowed = ALLOWED.includes(origin);
+    corsOptions = { origin: allowed };
+  }
+  // Methods/headers you actually need
+  corsOptions.methods = ['GET', 'POST', 'OPTIONS'];
+  corsOptions.allowedHeaders = ['Content-Type', 'Authorization'];
+  corsOptions.maxAge = 86400; // cache preflight for 1 day
+  cb(null, corsOptions);
+};
+
+app.use(cors(corsOptionsDelegate));
+app.options('*', cors(corsOptionsDelegate)); // handle all preflights
+
+// ---------- Body parsing ----------
 app.use(express.json());
 
+// ---------- DB ----------
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false } // Neon requires SSL
 });
 
-// Helpers
+// ---------- Helpers ----------
 const toInt = (v, fallback = null) => {
   if (v === undefined || v === null || v === '') return fallback;
   const n = Number(v);
   return Number.isFinite(n) ? parseInt(n, 10) : fallback;
 };
 
-// Health
+// ---------- Health ----------
 app.get('/health', async (_req, res) => {
   try {
     await pool.query('SELECT 1');
@@ -30,10 +62,11 @@ app.get('/health', async (_req, res) => {
   }
 });
 
+// ---------- Routes ----------
+
 /**
  * GET /skip-markers?tmdb_id=123&season=1&episode=2
- * - Movies: season=0&episode=0
- * - Returns 200 with object or null
+ * Movies: season=0&episode=0
  */
 app.get('/skip-markers', async (req, res) => {
   try {
@@ -65,9 +98,8 @@ app.get('/skip-markers', async (req, res) => {
 });
 
 /**
- * Legacy/back-compat:
+ * (Optional) Legacy:
  * GET /skip-markers/:tmdbEpisodeId
- * - Only if you still need it; otherwise you can remove this route.
  */
 app.get('/skip-markers/:tmdbEpisodeId', async (req, res) => {
   try {
@@ -96,18 +128,7 @@ app.get('/skip-markers/:tmdbEpisodeId', async (req, res) => {
 
 /**
  * POST /skip-markers
- * Body:
- * {
- *   "tmdb_id": number,          // required
- *   "season": number,           // default 0 for movie
- *   "episode": number,          // default 0 for movie
- *   "intro_start_seconds": number|null,
- *   "intro_end_seconds": number|null,
- *   "outro_start_seconds": number|null,
- *   "outro_end_seconds": number|null
- * }
- *
- * Behavior: UPSERT on (tmdb_id, season, episode)
+ * UPSERT on (tmdb_id, season, episode)
  */
 app.post('/skip-markers', async (req, res) => {
   try {
@@ -155,13 +176,21 @@ app.post('/skip-markers', async (req, res) => {
   }
 });
 
-// Fallback error handler
+// ---------- Fallback ----------
+app.get('/', (_req, res) => res.json({ ok: true, service: 'skip-marker-backend' }));
+
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
   res.status(500).json({ error: 'Internal server error', detail: err?.message });
 });
 
+// ---------- Start ----------
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
   console.log(`Skip Marker API listening on port ${PORT}`);
+  if (ALLOWED.length) {
+    console.log('CORS allowlist:', ALLOWED);
+  } else {
+    console.log('CORS: any origin (dev fallback)');
+  }
 });

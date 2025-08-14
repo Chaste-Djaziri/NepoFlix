@@ -20,7 +20,7 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "fuse.js": "^7.1.0",
-    "hls.js": "^1.6.7",
+    "hls.js": "^1.6.9",
     "iconoir-react": "^7.11.0",
     "lucide-react": "^0.514.0",
     "mobile-detect": "^1.4.5",

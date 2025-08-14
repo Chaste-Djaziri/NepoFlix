@@ -9,6 +9,7 @@ import {
   Cat,
   MoreHorizontal,
   FilterIcon,
+  Scissors,          // ⬅️ added
 } from 'lucide-react';
 
 // Define your core navigation items. The first three will show directly in the nav bar,
@@ -24,6 +25,7 @@ const navItems = [
 const headerIcons = [
   { to: '/search', label: 'Search', icon: Search, type: 'icon' },
   { to: '/watchlist', label: 'Watchlist', icon: Bookmark, type: 'icon' },
+  { to: '/marker', label: 'Marker', icon: Scissors, type: 'icon' }, // ⬅️ added
 ];
 
 // Component for the iOS install icon. Keeps your JSX cleaner below.
@@ -166,7 +168,6 @@ const Header = () => {
             aria-label={label}
             aria-current={location.pathname === to ? 'page' : undefined}
           >
-            {/* Always show the icon and label on mobile */}
             {Icon && <Icon className="w-6 h-6" />}
             <span className="text-xs mt-1">{label}</span>
           </NavLink>
