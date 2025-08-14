@@ -15,7 +15,7 @@
       ]
     },
     {
-      "source": "https://nepo-flix-v2-ssar.vercel.app/(.*)",
+      "source": "/m3u8proxy/(.*)",
       "headers": [
         { "key": "Access-Control-Allow-Origin", "value": "*" },
         { "key": "Access-Control-Allow-Methods", "value": "GET, POST, OPTIONS" },
