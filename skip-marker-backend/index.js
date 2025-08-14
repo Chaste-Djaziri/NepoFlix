@@ -14,7 +14,15 @@ const parseAllowedOrigins = (v) =>
     .filter(Boolean);
 
 // Example: ALLOWED_ORIGINS=https://nepo-flix-v2-y5as.vercel.app,http://localhost:5173
-const ALLOWED = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+// Always allow our public deployments in addition to any provided env list.
+const ENV_ALLOWED = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+const DEFAULT_ALLOWED = [
+  'https://nepoflix.micorp.pro',
+  'https://nepoflix.vercel.app'
+];
+const ALLOWED = ENV_ALLOWED.length
+  ? Array.from(new Set([...ENV_ALLOWED, ...DEFAULT_ALLOWED]))
+  : [];
 
 // If no allowlist is configured, default to "*" (useful for local dev)
 const corsOptionsDelegate = (req, cb) => {
@@ -178,6 +186,11 @@ app.post('/skip-markers', async (req, res) => {
 
 // ---------- Fallback ----------
 app.get('/', (_req, res) => res.json({ ok: true, service: 'skip-marker-backend' }));
+
+// Handle unmatched routes with a JSON 404 so CORS headers still apply
+app.use((req, res) => {
+  res.status(404).json({ error: 'Not found' });
+});
 
 app.use((err, _req, res, _next) => {
   console.error('Unhandled error:', err);
