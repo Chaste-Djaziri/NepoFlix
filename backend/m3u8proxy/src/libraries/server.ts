@@ -734,6 +734,9 @@ export async function proxyM3U8(url: string, headers: any, res: http.ServerRespo
         url: url,
         headers: headers
     });
+
+    // Ensure clients from any origin can access the proxied playlist
+    res.setHeader("Access-Control-Allow-Origin", "*");
     
     const req = await axios(url, {
         headers: headers,

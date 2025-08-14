@@ -14,7 +14,15 @@ const parseAllowedOrigins = (v) =>
     .filter(Boolean);
 
 // Example: ALLOWED_ORIGINS=https://nepo-flix-v2-y5as.vercel.app,http://localhost:5173
-const ALLOWED = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+// Always allow our public deployments in addition to any provided env list.
+const ENV_ALLOWED = parseAllowedOrigins(process.env.ALLOWED_ORIGINS);
+const DEFAULT_ALLOWED = [
+  'https://nepoflix.micorp.pro',
+  'https://nepoflix.vercel.app'
+];
+const ALLOWED = ENV_ALLOWED.length
+  ? Array.from(new Set([...ENV_ALLOWED, ...DEFAULT_ALLOWED]))
+  : [];
 
 // If no allowlist is configured, default to "*" (useful for local dev)
 const corsOptionsDelegate = (req, cb) => {
