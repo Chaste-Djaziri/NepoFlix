@@ -21,6 +21,8 @@ import Filter from './pages/browse/Filter.jsx';
 import Login from './pages/auth/Login.jsx';
 import Signup from './pages/auth/Signup.jsx';
 import ContinueWatching from './pages/browse/ContinueWatching.jsx';
+import AnimeWatchlistPage from './pages/anime/Watchlist.jsx';
+import AnimeWatch from './pages/anime/watch.jsx';
 
 export default function App() {
   return (
@@ -33,6 +35,7 @@ export default function App() {
         <Route path="/filter" element={<Filter />} />
         <Route path="/login" element={<Login />} />
         <Route path="/signup" element={<Signup />} />
+        <Route path="/anime/watchlist" element={<AnimeWatchlistPage />} />
         <Route path="/continue-watching" element={<ContinueWatching />} />
         <Route path="/movie/:tmdbId" element={<Details />} />
         <Route path="/tv/:tmdbId" element={<Details />} />
@@ -40,6 +43,7 @@ export default function App() {
         <Route path="/anime" element={<AnimeHome />} />
         <Route path="/anime/search" element={<AnimeSearch />} />
         <Route path="/anime/:id" element={<AnimeDetails />} />
+        <Route path="/anime/watch/:id" element={<AnimeWatch />} />
         <Route path="/watchlist" element={<Watchlist />} />
         <Route path="/search" element={<Search />} />
         <Route path="/ios" element={<Ios />} />

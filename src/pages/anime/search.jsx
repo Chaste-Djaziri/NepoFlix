@@ -1,253 +1,183 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+// src/pages/anime/search.jsx
+import React, { useEffect, useRef, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import { searchAnime } from '../../components/anime/search.jsx';
 import { AnimeCard } from '../../components/anime/ui/card.jsx';
 import AnimeHeader from '../../components/anime/ui/header.jsx';
+import { useAnimeSearchStore } from '../../store/animeSearchStore.js';
+
+const DEBOUNCE_MS = 500;
+const STALE_MS = 10 * 60 * 1000; // 10 minutes
 
 export default function AnimeSearch() {
-  const [searchParams] = useSearchParams();
-  const [searchResults, setSearchResults] = useState([]);
-  const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
-  const [loading, setLoading] = useState(false);
-  const [query, setQuery] = useState('');
-  const lastSearchRef = useRef({ query: '', page: 0 });
+  const [searchParams, setSearchParams] = useSearchParams();
 
+  // Zustand state/actions
+  const {
+    searchQuery,
+    hasSearched,
+    resultsByQuery,
+    setQuery,
+    setHasSearched,
+    saveResults,
+  } = useAnimeSearchStore();
+
+  // UI flags
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const inputRef = useRef(null);
+  const debounceRef = useRef(null);
+
+  // Helpers
+  const getCached = (query) => {
+    const entry = resultsByQuery?.[query];
+    if (!entry) return null;
+    const fresh = Date.now() - (entry.fetchedAt || 0) < STALE_MS;
+    return fresh ? entry.results : null;
+  };
+
+  const performSearch = async (query) => {
+    if (!query.trim()) return;
+
+    // use fresh cache if available
+    const cached = getCached(query);
+    if (cached) {
+      setHasSearched(true);
+      return;
+    }
+
+    try {
+      setIsLoading(true);
+      setHasSearched(true);
+      setError(null);
+
+      const { results = [] } = await searchAnime(query, 1);
+      saveResults(query, results);
+    } catch (e) {
+      console.error('Anime search error:', e);
+      setError(e?.message || 'Search failed');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadFromCacheOrFetch = async (query) => {
+    const cached = getCached(query);
+    if (cached) {
+      setHasSearched(true);
+    } else {
+      await performSearch(query);
+    }
+  };
+
+  // On mount: hydrate from URL (?query=…) or store
   useEffect(() => {
     document.body.style.backgroundColor = 'var(--color-anime-background)';
-    
-    const searchQuery = searchParams.get('q');
-    const page = parseInt(searchParams.get('page')) || 1;
-    
-    // Prevent duplicate requests for the same query and page
-    if (searchQuery && 
-        (searchQuery !== lastSearchRef.current.query || page !== lastSearchRef.current.page)) {
-      setQuery(searchQuery);
-      setCurrentPage(page);
-      performSearch(searchQuery, page);
-      lastSearchRef.current = { query: searchQuery, page };
-    }
-  }, [searchParams]);
 
-  const performSearch = async (searchQuery, page = 1) => {
-    if (!searchQuery || searchQuery.trim() === '') return;
-    
-    setLoading(true);
-    try {
-      const { totalPages: total, results } = await searchAnime(searchQuery, page);
-      setSearchResults(results);
-      setTotalPages(total);
-    } catch (error) {
-      console.error('Search error:', error);
-      setSearchResults([]);
-      setTotalPages(1);
-    } finally {
-      setLoading(false);
-    }
-  };
+    // Accept both ?query and legacy ?q
+    const urlQuery = searchParams.get('query') || searchParams.get('q') || '';
 
-  const renderSearchResults = () => {
-    if (loading) {
-      return (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-          {Array.from({ length: 20 }).map((_, index) => (
-            <div key={index} className="bg-anime-card-bg border border-anime-border/10 rounded-lg overflow-hidden animate-pulse">
-              <div className="w-full h-64 bg-anime-skeleton-bg"></div>
-              <div className="p-3">
-                <div className="h-4 bg-anime-skeleton-bg rounded mb-2"></div>
-                <div className="h-3 bg-anime-skeleton-bg rounded w-3/4"></div>
-              </div>
-            </div>
-          ))}
-        </div>
-      );
+    if (urlQuery) {
+      if (urlQuery !== searchQuery) setQuery(urlQuery);
+      loadFromCacheOrFetch(urlQuery);
+    } else if (searchQuery) {
+      setSearchParams({ query: searchQuery });
+      loadFromCacheOrFetch(searchQuery);
     }
 
-    if (!searchResults || searchResults.length === 0) {
-      return (
-        <div className="flex items-center justify-center p-8">
-          <div className="text-center">
-            <p className="text-white opacity-60 text-lg mb-2">No results found</p>
-            <p className="text-white opacity-40">Try searching with different keywords</p>
-          </div>
-        </div>
-      );
-    }
+    inputRef.current?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-    return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-        {searchResults.map((anime, index) => (
-          <Link
-            key={anime.id || index}
-            to={`/anime/${anime.id}`}
-            className="anime-card bg-anime-card-bg border border-anime-border/10 rounded-lg overflow-hidden hover:bg-anime-skeleton-bg transition duration-200 ease cursor-pointer"
-          >
-            <div className="relative">
-              <img 
-                src={anime.poster || `https://placehold.co/200x300/141414/fff/?text=${encodeURIComponent(anime.title || 'Unknown')}&font=poppins`}
-                alt={anime.title || 'Anime'} 
-                className="w-full h-64 object-cover"
-              />
-              <div className="absolute top-2 left-2 flex flex-col space-y-1">
-                {anime.tvInfo?.quality && anime.tvInfo.quality.includes('HD') && (
-                  <span className="text-xs bg-green-600 text-white px-1.5 py-0.5 rounded-md font-medium">
-                    HD
-                  </span>
-                )}
-                {anime.tvInfo?.sub && (
-                  <span className="text-xs bg-blue-600 text-white px-1.5 py-0.5 rounded-md font-medium">
-                    SUB {anime.tvInfo.sub}
-                  </span>
-                )}
-                {anime.tvInfo?.dub && (
-                  <span className="text-xs bg-purple-600 text-white px-1.5 py-0.5 rounded-md font-medium">
-                    DUB {anime.tvInfo.dub}
-                  </span>
-                )}
-                {anime.tvInfo?.eps && (
-                  <span className="text-xs bg-gray-600 text-white px-1.5 py-0.5 rounded-md font-medium">
-                    {anime.tvInfo.eps} EPS
-                  </span>
-                )}
-                {anime.duration && (
-                  <span className="text-xs bg-orange-600 text-white px-1.5 py-0.5 rounded-md font-medium">
-                    {anime.duration}
-                  </span>
-                )}
-              </div>
-            </div>
-            <div className="p-3">
-              <h3 className="font-semibold mb-1 text-white truncate">{anime.title || 'Unknown Anime'}</h3>
-              {anime.japanese_title && (
-                <p className="text-xs text-white/50 truncate">{anime.japanese_title}</p>
-              )}
-            </div>
-          </Link>
-        ))}
-      </div>
-    );
-  };
+  // Debounced auto-search + URL sync
+  const onInputChange = (e) => {
+    const value = e.target.value;
+    setQuery(value);
 
-  const renderPaginationControls = () => {
-    if (totalPages <= 1) return null;
-
-    const pages = [];
-    const maxVisiblePages = 5;
-    
-    let startPage = Math.max(currentPage - Math.floor(maxVisiblePages / 2), 1);
-    let endPage = Math.min(startPage + maxVisiblePages - 1, totalPages);
-    
-    if (endPage - startPage < maxVisiblePages - 1) {
-      startPage = Math.max(endPage - maxVisiblePages + 1, 1);
-    }
-    
-    // Previous button
-    if (currentPage > 1) {
-      pages.push(
-        <Link
-          key="prev"
-          to={`/anime/search?q=${encodeURIComponent(query)}&page=${currentPage - 1}`}
-          className="bg-anime-card-bg border border-anime-border/10 rounded-md px-3 py-1 hover:bg-[#1f1f1f] transition-colors"
-        >
-          &laquo;
-        </Link>
-      );
-    }
-    
-    // First page
-    if (startPage > 1) {
-      pages.push(
-        <Link
-          key="1"
-          to={`/anime/search?q=${encodeURIComponent(query)}&page=1`}
-          className="bg-anime-card-bg border border-anime-border/10 rounded-md px-3 py-1 hover:bg-[#1f1f1f] transition-colors"
-        >
-          1
-        </Link>
-      );
-      
-      if (startPage > 2) {
-        pages.push(<span key="dots1" className="px-2">...</span>);
+    clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(() => {
+      if (value.trim()) {
+        setSearchParams({ query: value });
+        loadFromCacheOrFetch(value);
+      } else {
+        setSearchParams({});
+        setHasSearched(false);
       }
-    }
-    
-    // Page numbers
-    for (let i = startPage; i <= endPage; i++) {
-      const isActive = i === currentPage;
-      pages.push(
-        <Link
-          key={i}
-          to={`/anime/search?q=${encodeURIComponent(query)}&page=${i}`}
-          className={`border rounded-md px-3 py-1 transition-colors ${
-            isActive 
-              ? 'bg-accent text-white border-accent' 
-              : 'bg-anime-card-bg border-anime-border/10 hover:bg-[#1f1f1f]'
-          }`}
-        >
-          {i}
-        </Link>
-      );
-    }
-    
-    // Last page (if not included in the range)
-    if (endPage < totalPages) {
-      if (endPage < totalPages - 1) {
-        pages.push(<span key="dots2" className="px-2">...</span>);
-      }
-      
-      pages.push(
-        <Link
-          key={totalPages}
-          to={`/anime/search?q=${encodeURIComponent(query)}&page=${totalPages}`}
-          className="bg-anime-card-bg border border-anime-border/10 rounded-md px-3 py-1 hover:bg-[#1f1f1f] transition-colors"
-        >
-          {totalPages}
-        </Link>
-      );
-    }
-    
-    // Next button
-    if (currentPage < totalPages) {
-      pages.push(
-        <Link
-          key="next"
-          to={`/anime/search?q=${encodeURIComponent(query)}&page=${currentPage + 1}`}
-          className="bg-anime-card-bg border border-anime-border/10 rounded-md px-3 py-1 hover:bg-[#1f1f1f] transition-colors"
-        >
-          &raquo;
-        </Link>
-      );
-    }
-    
-    return (
-      <div className="flex space-x-2 items-center text-white">
-        {pages}
-      </div>
-    );
+    }, DEBOUNCE_MS);
   };
+
+  const effectiveResults = searchQuery
+    ? resultsByQuery?.[searchQuery]?.results || []
+    : [];
 
   return (
     <div className="min-h-screen text-white">
       <AnimeHeader />
-      
-      <div className="search-container pt-20 pb-8 px-4 w-full max-w-7xl mx-auto">
-        {query && (
-          <div className="mb-6">
-            <h1 className="text-2xl font-bold mb-2">Search Results for "{query}"</h1>
-            <p className="text-white/60">
-              {loading ? 'Searching...' : `Found ${searchResults.length} results`}
-              {totalPages > 1 && ` (Page ${currentPage} of ${totalPages})`}
-            </p>
+
+      <div className="pt-20 pb-10 px-4 w-full max-w-7xl mx-auto">
+        <h1 className="text-3xl font-bold mb-4">Search Anime</h1>
+
+        {/* Search input (auto-search) */}
+        <div className="mb-6">
+          <div className="relative w-full">
+            <input
+              ref={inputRef}
+              type="text"
+              value={searchQuery}
+              onChange={onInputChange}
+              placeholder="Search anime titles…"
+              className="w-full bg-anime-card-bg border border-anime-border/10 text-white text-base px-4 py-3 pr-12 rounded-lg focus:outline-none focus:border-white/30"
+              inputMode="search"
+            />
+            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-white/60 select-none">
+              ⌘K
+            </span>
+          </div>
+        </div>
+
+        {error && (
+          <div className="mb-6 text-red-400 bg-red-900/20 border border-red-700/30 rounded-lg px-4 py-3">
+            Error: {error}
           </div>
         )}
-        
-        <div id="search-results" className="min-h-[50vh]">
-          {renderSearchResults()}
-        </div>
-        
-        <div id="search-pagination" className="mt-8 flex justify-center">
-          {renderPaginationControls()}
-        </div>
+
+        {/* States */}
+        {isLoading ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
+            {Array.from({ length: 15 }).map((_, i) => (
+              <div key={i} className="bg-anime-card-bg border border-anime-border/10 rounded-lg overflow-hidden animate-pulse">
+                <div className="w-full aspect-[2/3] bg-anime-skeleton-bg" />
+                <div className="p-3">
+                  <div className="h-4 bg-anime-skeleton-bg rounded mb-2" />
+                  <div className="h-3 bg-anime-skeleton-bg rounded w-3/4" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : hasSearched && effectiveResults.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-16">
+            <div className="text-white text-xl mb-2">No results found</div>
+            <p className="text-white/60">Try another title or adjust your spelling.</p>
+          </div>
+        ) : hasSearched ? (
+          <>
+            <div className="mb-4 text-white/70">
+              Showing {effectiveResults.length} result{effectiveResults.length === 1 ? '' : 's'}
+              {searchQuery ? ` for “${searchQuery}”` : ''}
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-5 gap-4">
+              {effectiveResults.map((anime) => (
+                <AnimeCard key={anime.id} animeData={anime} />
+              ))}
+            </div>
+          </>
+        ) : (
+          <div className="flex flex-col items-center justify-center py-16">
+            <div className="text-white text-xl mb-2">Search for anime</div>
+            <p className="text-white/60">Start typing a title above to see results.</p>
+          </div>
+        )}
       </div>
     </div>
   );

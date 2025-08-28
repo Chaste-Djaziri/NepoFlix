@@ -1,119 +1,311 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+// src/pages/anime/details.jsx
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { ArrowLeft, Play } from 'lucide-react';
 import { fetchAnimeInfo, fetchEpisodesList } from '../../components/anime/animeData.jsx';
-import { getSourceUrl, getDefaultSource, animeSources } from './sources.jsx';
-import { extractSeasonNumber, findTmdbIdForSeason } from '../../components/anime/animeDetailsData.jsx';
+import {
+  extractSeasonNumber,
+  findTmdbIdForSeason,
+  fetchTmdbCredits,          // <- now exported
+  fetchTmdbRecommendations,   // <- now exported
+} from '../../components/anime/animeDetailsData.jsx';
 import { fetchEpisodeThumbnails } from '../../components/anime/episodeThumbnails.jsx';
+import { searchAnime } from '../../components/anime/search.jsx';
 import AnimeHeader from '../../components/anime/ui/header.jsx';
-import AnimeDetailsModal from '../../components/anime/ui/animeDetailsModal.jsx';
+import { AnimeCard } from '../../components/anime/ui/card.jsx';
+import { useAnimeWatchlistStore } from '../../store/animeWatchlistStore';
+
+// ---------- tiny utils ----------
+const get = (obj, path, def = undefined) => {
+  try { return path.split('.').reduce((o, k) => (o ? o[k] : undefined), obj) ?? def; }
+  catch { return def; }
+};
+const getGenres = (info) => {
+  if (!info) return [];
+  const split = (s) => s.split(',').map((g) => g.trim()).filter(Boolean);
+  if (Array.isArray(info.Genres)) return info.Genres;
+  if (typeof info.Genres === 'string') return split(info.Genres);
+  if (Array.isArray(info.genres)) return info.genres;
+  if (typeof info.genres === 'string') return split(info.genres);
+  return [];
+};
+
+// Normalize provider cast
+const normalizeCast = (animeData) => {
+  if (!animeData) return [];
+  let raw = animeData.characters || animeData.casts || animeData.cast || animeData.actors || animeData.staff;
+
+  if (!Array.isArray(raw) || raw.length === 0) {
+    const charEdges = get(animeData, 'characters.edges');
+    if (Array.isArray(charEdges) && charEdges.length) {
+      raw = charEdges.map((e, i) => ({
+        name: get(e, 'node.name.full') || get(e, 'node.name.userPreferred') || get(e, 'node.name.native') || 'Unknown',
+        character: get(e, 'node.name.full') || '',
+        role: e.role || 'Character',
+        image: get(e, 'node.image.large') || get(e, 'node.image.medium') || null,
+        _k: get(e, 'node.id') || `ce-${i}`,
+      }));
+    }
+  }
+  if (!Array.isArray(raw) || raw.length === 0) {
+    const staffEdges = get(animeData, 'staff.edges');
+    if (Array.isArray(staffEdges) && staffEdges.length) {
+      raw = staffEdges.map((e, i) => ({
+        name: get(e, 'node.name.full') || get(e, 'node.name.userPreferred') || get(e, 'node.name.native') || 'Unknown',
+        character: '',
+        role: get(e, 'role') || 'Staff',
+        image: get(e, 'node.image.large') || get(e, 'node.image.medium') || null,
+        _k: get(e, 'node.id') || `se-${i}`,
+      }));
+    }
+  }
+  if (Array.isArray(raw) && raw.length) {
+    return raw.map((c, i) =>
+      typeof c === 'string'
+        ? { name: c, role: 'Cast', image: null, _k: `s-${i}` }
+        : {
+            name: c.name || c.actor || c.character || c.role || 'Unknown',
+            character: c.character || '',
+            role: c.role || (c.character ? 'Character' : 'Cast'),
+            image: c.image || c.img || c.profile || c.picture || null,
+            _k: c.id || c._id || c.slug || i,
+          }
+    );
+  }
+  const infoStr =
+    get(animeData, 'animeInfo.Casts') ||
+    get(animeData, 'animeInfo.Actors') ||
+    get(animeData, 'animeInfo.Characters') ||
+    '';
+  if (typeof infoStr === 'string' && infoStr.trim()) {
+    return infoStr.split(',').map((n, i) => ({ name: n.trim(), role: 'Cast', image: null, _k: `is-${i}` }));
+  }
+  return [];
+};
+
+// Normalize provider similar
+const normalizeSimilar = (animeData) => {
+  if (!animeData) return [];
+  let pools = [
+    animeData.similar,
+    animeData.related,
+    animeData.recommendations,
+    get(animeData, 'relations'),
+  ].filter(Boolean);
+
+  const relEdges = get(animeData, 'relations.edges');
+  if (Array.isArray(relEdges) && relEdges.length) {
+    pools.push(relEdges.map((e) => ({ ...(get(e, 'node') || {}) })));
+  }
+  const recNodes = get(animeData, 'recommendations.nodes');
+  if (Array.isArray(recNodes) && recNodes.length) {
+    pools.push(recNodes.map((n) => get(n, 'mediaRecommendation') || n.media || n));
+  }
+
+  const flat = pools.flat().filter(Boolean);
+  return flat
+    .map((a, i) => ({
+      id: a.id || a.route || a.slug || a.animeId || a._id || `sim-${i}`,
+      title:
+        a.title ||
+        a.name ||
+        get(a, 'titles.english') ||
+        get(a, 'titles.romaji') ||
+        get(a, 'node.title.english') ||
+        get(a, 'node.title.romaji') ||
+        'Unknown',
+      poster: a.poster || a.image || a.cover || a.banner || get(a, 'coverImage.large') || null,
+      tvInfo: a.tvInfo || {},
+    }))
+    .filter((x) => x.id);
+};
 
 export default function AnimeDetails() {
   const { id } = useParams();
+  const navigate = useNavigate();
+
   const [animeData, setAnimeData] = useState(null);
   const [episodesData, setEpisodesData] = useState(null);
-  const [currentEpisode, setCurrentEpisode] = useState(null);
-  const [currentSource, setCurrentSource] = useState(getDefaultSource());
-  const [currentLanguage, setCurrentLanguage] = useState('sub');
   const [currentSeason, setCurrentSeason] = useState(1);
   const [loading, setLoading] = useState(true);
   const [episodesLoading, setEpisodesLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [showModal, setShowModal] = useState(false);
+
   const [episodeThumbnails, setEpisodeThumbnails] = useState({});
+  const [tmdbMeta, setTmdbMeta] = useState(null); // { tmdbId, seasonNumber, usedTitle }
+
+  // TMDB fallbacks
+  const [castFallback, setCastFallback] = useState([]);
+  const [similarFallback, setSimilarFallback] = useState([]);
+  const [resolvedSimilar, setResolvedSimilar] = useState([]);
+  const [resolvingSimilar, setResolvingSimilar] = useState(false);
+
   const loadedSeasons = useRef(new Set());
   const thumbnailsLoaded = useRef(false);
 
+  // Zustand (stable selectors)
+  const toggleWatch = useAnimeWatchlistStore((s) => s.toggle);
+  const items = useAnimeWatchlistStore((s) => s.items);
+  const inWatchlist = animeData ? !!items[animeData.id] : false;
+
   useEffect(() => {
     document.body.style.backgroundColor = 'var(--color-anime-background)';
-    // Reset state when navigating to a new anime
     setEpisodeThumbnails({});
     thumbnailsLoaded.current = false;
     loadedSeasons.current.clear();
+
+    setTmdbMeta(null);
+    setCastFallback([]);
+    setSimilarFallback([]);
+    setResolvedSimilar([]);
+
     loadAnimeData();
   }, [id]);
 
+  // Cache TMDB season/series match once
   useEffect(() => {
-    // Only fetch thumbnails once per anime and if we have the required data
-    if (animeData && episodesData?.episodes && !thumbnailsLoaded.current) {
-      fetchEpisodeThumbnailsData();
-      thumbnailsLoaded.current = true;
-    }
-  }, [animeData, episodesData]);
+    const ensureTmdb = async () => {
+      if (!animeData || !episodesData?.episodes || tmdbMeta) return;
+      const baseTitle =
+        animeData.seasons && animeData.seasons.length > 0
+          ? animeData.seasons[0].name
+          : animeData.title;
+      try {
+        const match = await findTmdbIdForSeason(baseTitle);
+        if (match?.tmdbId) {
+          setTmdbMeta({ tmdbId: match.tmdbId, seasonNumber: match.seasonNumber, usedTitle: baseTitle });
+        }
+      } catch (e) {
+        console.warn('TMDB season match error:', e);
+      }
+    };
+    ensureTmdb();
+  }, [animeData, episodesData, tmdbMeta]);
 
-  const fetchEpisodeThumbnailsData = async () => {
-    if (!animeData?.title || !episodesData?.episodes) return;
-
-    try {
-      console.log('Fetching episode thumbnails for:', animeData.title);
-      
-      // Use the current season's title for better TMDB matching
-      const searchQuery = animeData.seasons && animeData.seasons.length > 0 ? 
-        animeData.seasons[0].name : animeData.title;
-
-      // Get enhanced TMDB data for the current season
-      const tmdbSearchResult = await findTmdbIdForSeason(searchQuery);
-      
-      if (tmdbSearchResult?.tmdbId) {
-        console.log('Found TMDB data for initial load:', tmdbSearchResult);
-        
-        const thumbnails = await fetchEpisodeThumbnails(
+  // Thumbnails (TMDB-driven)
+  useEffect(() => {
+    const fetchThumbs = async () => {
+      if (!animeData || !episodesData?.episodes || thumbnailsLoaded.current) return;
+      const titleForSearch =
+        animeData.seasons && animeData.seasons.length > 0
+          ? animeData.seasons[0].name
+          : animeData.title;
+      try {
+        let seasonNum = 1;
+        if (tmdbMeta?.seasonNumber) {
+          seasonNum = tmdbMeta.seasonNumber;
+        } else {
+          const tmp = await findTmdbIdForSeason(titleForSearch);
+          seasonNum = tmp?.seasonNumber || 1;
+        }
+        const thumbs = await fetchEpisodeThumbnails(
           episodesData.episodes.length,
-          tmdbSearchResult.seasonNumber,
-          searchQuery
+          seasonNum,
+          titleForSearch
         );
-
-        if (thumbnails) {
-          console.log('Successfully fetched initial thumbnails:', thumbnails.length);
-          const thumbnailsMap = {};
-          thumbnails.forEach(thumb => {
-            if (thumb.thumbnail) {
-              thumbnailsMap[thumb.episode_no] = {
-                thumbnail: thumb.thumbnail,
-                name: thumb.name,
-                description: thumb.description,
-                tmdbId: tmdbSearchResult.tmdbId
+        if (thumbs?.length) {
+          const map = {};
+          thumbs.forEach((t) => {
+            if (t.thumbnail) {
+              map[t.episode_no] = {
+                thumbnail: t.thumbnail,
+                name: t.name,
+                description: t.description,
               };
             }
           });
-          setEpisodeThumbnails(thumbnailsMap);
-        } else {
-          console.log('No thumbnails found for initial load');
+          setEpisodeThumbnails(map);
         }
-      } else {
-        console.log('No TMDB match found for initial load');
+      } catch (e) {
+        console.warn('Episode thumbnails error:', e);
+      } finally {
+        thumbnailsLoaded.current = true;
       }
-    } catch (error) {
-      console.error('Error fetching episode thumbnails:', error);
-    }
-  };
+    };
+    fetchThumbs();
+  }, [animeData, episodesData, tmdbMeta]);
+
+  // Cast fallback via TMDB if provider cast is empty
+  useEffect(() => {
+    const maybeFetchCast = async () => {
+      if (!animeData || !tmdbMeta?.tmdbId) return;
+      const haveProviderCast = normalizeCast(animeData).length > 0;
+      if (haveProviderCast || castFallback.length > 0) return;
+      const res = await fetchTmdbCredits(tmdbMeta.tmdbId);
+      if (Array.isArray(res?.cast) && res.cast.length) {
+        setCastFallback(
+          res.cast.map((c, i) => ({
+            name: c.name || 'Unknown',
+            character: c.role || '',
+            role: c.role || 'Cast',
+            image: c.image || null,
+            _k: `tmdbc-${i}`,
+          }))
+        );
+      }
+    };
+    maybeFetchCast();
+  }, [animeData, tmdbMeta, castFallback.length]);
+
+  // Similar fallback via TMDB if provider similar is empty
+  useEffect(() => {
+    const maybeFetchSimilar = async () => {
+      if (!animeData || !tmdbMeta?.tmdbId) return;
+      const haveProviderSimilar = normalizeSimilar(animeData).length > 0;
+      if (haveProviderSimilar || similarFallback.length > 0) return;
+      const list = await fetchTmdbRecommendations(tmdbMeta.tmdbId);
+      setSimilarFallback(list.slice(0, 12));
+    };
+    maybeFetchSimilar();
+  }, [animeData, tmdbMeta, similarFallback.length]);
+
+  // Resolve TMDB similar to provider IDs via your search endpoint
+  useEffect(() => {
+    const resolveIds = async () => {
+      if (!similarFallback.length || resolvingSimilar || resolvedSimilar.length) return;
+      setResolvingSimilar(true);
+      try {
+        const mapped = [];
+        for (const item of similarFallback) {
+          const title = item.title;
+          try {
+            const { results } = await searchAnime(title, 1);
+            const first = Array.isArray(results) ? results[0] : null;
+            if (first?.id) {
+              mapped.push({
+                id: first.id,
+                title: first.title || title,
+                poster: first.poster || item.poster,
+                tvInfo: first.tvInfo || {},
+              });
+            }
+          } catch {}
+        }
+        setResolvedSimilar(mapped);
+      } finally {
+        setResolvingSimilar(false);
+      }
+    };
+    resolveIds();
+  }, [similarFallback, resolvingSimilar, resolvedSimilar.length]);
 
   const loadAnimeData = async () => {
     try {
       setLoading(true);
-
       const [animeInfo, episodesList] = await Promise.all([
         fetchAnimeInfo(id),
-        fetchEpisodesList(id)
+        fetchEpisodesList(id),
       ]);
-
-      if (!animeInfo) {
-        throw new Error('Failed to fetch anime data');
-      }
+      if (!animeInfo) throw new Error('Failed to fetch anime data');
 
       setAnimeData(animeInfo);
       setEpisodesData(episodesList);
       loadedSeasons.current.add(id);
 
-      if (episodesList?.episodes && episodesList.episodes.length > 0) {
-        setCurrentEpisode(episodesList.episodes[0]);
-      }
-
-      // Set initial season
       if (animeInfo.seasons && animeInfo.seasons.length > 0) {
         const firstSeasonNumber = extractSeasonNumber(animeInfo.seasons[0].name);
         setCurrentSeason(firstSeasonNumber);
       }
-
     } catch (err) {
       console.error('Error loading anime details:', err);
       setError(err.message);
@@ -123,223 +315,124 @@ export default function AnimeDetails() {
   };
 
   const handleSeasonChange = async (seasonRoute) => {
-    if (!seasonRoute || seasonRoute === '') return;
-    
+    if (!seasonRoute) return;
     try {
       setEpisodesLoading(true);
-      setEpisodeThumbnails({}); // Clear existing thumbnails
-      thumbnailsLoaded.current = false; // Reset thumbnail loading flag
-      
-      // Extract season ID from route
-      const seasonId = seasonRoute;
-      
-      // Fetch new episodes data for the selected season
+      setEpisodeThumbnails({});
+      thumbnailsLoaded.current = false;
+
       const [newAnimeInfo, newEpisodesData] = await Promise.all([
-        fetchAnimeInfo(seasonId),
-        fetchEpisodesList(seasonId)
+        fetchAnimeInfo(seasonRoute),
+        fetchEpisodesList(seasonRoute),
       ]);
 
       if (newAnimeInfo && newEpisodesData) {
-        // Update anime data with new season info
-        setAnimeData(prevData => ({
-          ...prevData,
+        setAnimeData((prev) => ({
+          ...prev,
           ...newAnimeInfo,
-          seasons: prevData.seasons // Keep original seasons list
+          seasons: prev.seasons,
         }));
-        
         setEpisodesData(newEpisodesData);
         loadedSeasons.current.add(seasonRoute);
-        
-        // Reset to first episode of new season
-        if (newEpisodesData.episodes && newEpisodesData.episodes.length > 0) {
-          setCurrentEpisode(newEpisodesData.episodes[0]);
-        }
-        
-        // Update current season
+
         const seasonNumber = extractSeasonNumber(newAnimeInfo.title);
         setCurrentSeason(seasonNumber);
 
-        // Fetch new TMDB data and episode thumbnails for the new season
-        await fetchSeasonSpecificTmdbData(newAnimeInfo, newEpisodesData.episodes);
+        // reset TMDB fallbacks so they refresh for the new season/title
+        setCastFallback([]);
+        setSimilarFallback([]);
+        setResolvedSimilar([]);
+        setTmdbMeta(null);
       }
-    } catch (error) {
-      console.error('Error changing season:', error);
+    } catch (e) {
+      console.error('Season change error:', e);
     } finally {
       setEpisodesLoading(false);
     }
   };
 
-  const fetchSeasonSpecificTmdbData = async (seasonAnimeData, episodes) => {
-    if (!seasonAnimeData?.title || !episodes?.length) return;
-
-    try {
-      console.log('Fetching season-specific TMDB data for:', seasonAnimeData.title);
-      
-      // Use the new season's title to search for TMDB data
-      const searchQuery = seasonAnimeData.title;
-      const seasonNumber = extractSeasonNumber(seasonAnimeData.title);
-      
-      // Search for TMDB ID using the season's title
-      const tmdbSearchResult = await findTmdbIdForSeason(searchQuery);
-      
-      if (tmdbSearchResult?.tmdbId) {
-        console.log(`Found TMDB match for "${searchQuery}":`, tmdbSearchResult.tmdbId);
-        
-        // Fetch episode thumbnails using the new TMDB data
-        const thumbnails = await fetchEpisodeThumbnails(
-          episodes.length,
-          tmdbSearchResult.seasonNumber || seasonNumber,
-          searchQuery
-        );
-
-        if (thumbnails) {
-          console.log('Successfully fetched thumbnails for new season:', thumbnails.length);
-          const thumbnailsMap = {};
-          thumbnails.forEach(thumb => {
-            if (thumb.thumbnail) {
-              thumbnailsMap[thumb.episode_no] = {
-                thumbnail: thumb.thumbnail,
-                name: thumb.name,
-                description: thumb.description,
-                tmdbId: tmdbSearchResult.tmdbId
-              };
-            }
-          });
-          setEpisodeThumbnails(thumbnailsMap);
-          thumbnailsLoaded.current = true;
-        } else {
-          console.log('No thumbnails found for new season');
-        }
-      } else {
-        console.log('No TMDB match found for new season');
-      }
-    } catch (error) {
-      console.error('Error fetching season-specific TMDB data:', error);
-    }
-  };
-
-  const handleServerClick = (sourceId, language) => {
-    const source = animeSources.find(src => src.id === sourceId);
-    if (source) {
-      setCurrentSource(source);
-      setCurrentLanguage(language);
-    }
-  };
-
-  const handleEpisodeClick = (episode) => {
-    setCurrentEpisode(episode);
-  };
-
-  const getIframeSrc = () => {
-    if (!currentEpisode || !animeData) return 'about:blank';
-    
-    const animeDataWithSeason = {
-      ...animeData,
-      season: animeData.seasons && animeData.seasons.length > 0 
-        ? extractSeasonNumber(animeData.seasons[0].name) 
-        : '1'
-    };
-    
-    return getSourceUrl(currentSource.id, currentLanguage, currentEpisode, animeDataWithSeason);
-  };
-
-  const renderSeasonOptions = (seasons) => {
-    if (!seasons || seasons.length === 0) {
-      return <option value="">No seasons available</option>;
-    }
-    
-    return seasons.map((season, index) => (
-      <option key={index} value={season.route}>
-        {season.name}
-      </option>
-    ));
-  };
-
   const SkeletonEpisode = () => (
-    <div className="bg-anime-card-bg border border-anime-border/10 rounded-lg p-4 animate-pulse">
-      <div className="flex items-center space-x-3">
-        <div className="flex-shrink-0">
-          <div className="w-20 h-12 bg-gray-600 rounded"></div>
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="h-4 bg-gray-600 rounded w-24 mb-2"></div>
-          <div className="h-3 bg-gray-600 rounded w-32"></div>
-        </div>
-      </div>
+    <div className="bg-anime-card-bg border border-anime-border/10 rounded-xl p-3 animate-pulse">
+      <div className="aspect-video rounded-md bg-gray-700" />
+      <div className="h-3 w-2/3 bg-gray-700 rounded mt-2" />
     </div>
   );
 
-  const renderEpisodesList = (episodes) => {
+  const firstEpisodeLink = useMemo(() => {
+    const ep = episodesData?.episodes?.[0];
+    if (!animeData?.id || !ep) return null;
+    return `/anime/watch/${animeData.id}?ep=${encodeURIComponent(ep.episode_no)}&epid=${encodeURIComponent(ep.episodeid || '')}`;
+  }, [episodesData, animeData]);
+
+  const renderEpisodes = (episodes) => {
     if (episodesLoading) {
       return (
-        <div className="space-y-4">
-          {Array.from({ length: 6 }, (_, index) => (
-            <SkeletonEpisode key={index} />
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+          {Array.from({ length: 8 }, (_, i) => (
+            <SkeletonEpisode key={i} />
           ))}
         </div>
       );
     }
-
     if (!episodes || episodes.length === 0) {
-      return (
-        <div className="text-center py-10 text-gray-400">
-          No episodes available
-        </div>
-      );
+      return <div className="text-center py-10 text-gray-400">No episodes available</div>;
     }
 
-    return episodes.map((episode, index) => {
-      const episodeNumber = parseInt(episode.episode_no);
-      const thumbnailData = episodeThumbnails[episodeNumber];
-      const thumbnail = thumbnailData?.thumbnail || 
-                       episode.thumbnail || 
-                       'https://placehold.co/320x180/141414/fff/?text=Episode&font=poppins';
+    return (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+        {episodes.map((episode, idx) => {
+          const epNo = parseInt(episode.episode_no);
+          const t = episodeThumbnails[epNo];
+          const thumb =
+            t?.thumbnail ||
+            episode.thumbnail ||
+            'https://placehold.co/320x180/141414/fff/?text=Episode&font=poppins';
+          const title =
+            t?.name || episode.title || episode.japanese_title || `Episode ${episode.episode_no}`;
 
-      return (
-        <div
-          key={episode.episodeid || index}
-          onClick={() => handleEpisodeClick(episode)}
-          className={`EP_ITEM bg-anime-card-bg border border-anime-border/10 rounded-xl xl:*:overflow-hidden hover:bg-anime-card-hover hover:scale-[1.02] active:scale-[0.98] transition duration-200 ease cursor-pointer ${
-            currentEpisode?.episodeid === episode.episodeid ? 'border-anime-border/15 !bg-anime-border/10 border-1' : ''
-          }`}
-          data-episode-id={episode.id}
-          data-epid={episode.epid}
-          data-episode-no={episode.episode_no}
-          data-episodeid={episode.episodeid}
-          data-tmdbid={thumbnailData?.tmdbId || ''}
-          data-description={thumbnailData?.description || ''}
-          style={{ opacity: 1, transform: 'translateY(0px)' }}
-        >
-          <div className="flex flex-col xl:flex-row">
-            <div className="aspect-video p-2 pr-0 w-80">
-              <img
-                src={thumbnail}
-                alt={thumbnailData?.name || episode.title || episode.japanese_title || `Episode ${episode.episode_no}`}
-                className="w-full h-full object-cover rounded-md"
-                onError={(e) => {
-                  e.target.src = 'https://placehold.co/320x180/141414/fff/?text=Episode&font=poppins';
-                }}
-              />
-            </div>
-            <div className="w-2/3 p-3 pr-0 flex flex-col gap-1 justify-center">
-              <h3 className="font-medium line-clamp-2">
-                {thumbnailData?.name || episode.title || episode.japanese_title || `Episode ${episode.episode_no}`}
+          return (
+            <Link
+              to={`/anime/watch/${animeData?.id}?ep=${encodeURIComponent(
+                episode.episode_no
+              )}&epid=${encodeURIComponent(episode.episodeid || '')}`}
+              key={episode.episodeid || idx}
+              className="group bg-anime-card-bg/70 border border-anime-border/10 rounded-xl overflow-hidden hover:border-white/20 transition"
+            >
+              <div className="relative aspect-video">
+                <img
+                  src={thumb}
+                  alt={title}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                  onError={(e) => {
+                    e.currentTarget.src =
+                      'https://placehold.co/320x180/141414/fff/?text=Episode&font=poppins';
+                  }}
+                />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/70 via-black/10 to-transparent opacity-0 group-hover:opacity-100 transition" />
+                <div className="absolute bottom-2 left-2 right-2 flex items-center justify-between">
+                  <span className="text-[11px] px-2 py-1 rounded bg-black/70 border border-white/10">
+                    Ep {episode.episode_no}
+                  </span>
+                  <Play className="w-4 h-4 opacity-0 group-hover:opacity-100 transition" />
+                </div>
+              </div>
+              <div className="p-3">
+                <div className="text-sm font-medium line-clamp-2">{title}</div>
+                {t?.description && (
+                  <p className="mt-1 text-xs text-white/70 line-clamp-2">{t.description}</p>
+                )}
                 {episode.filler && (
-                  <span className="ml-2 px-2 py-1 text-xs bg-yellow-600 text-white rounded-full">
+                  <span className="inline-block mt-2 text-[10px] px-2 py-[2px] rounded-full bg-yellow-600/90">
                     Filler
                   </span>
                 )}
-              </h3>
-              {thumbnailData?.description && (
-                <p className="text-sm text-white/70 line-clamp-3 leading-tight">
-                  {thumbnailData.description}
-                </p>
-              )}
-            </div>
-          </div>
-        </div>
-      );
-    });
+              </div>
+            </Link>
+          );
+        })}
+      </div>
+    );
   };
 
   if (loading) {
@@ -349,22 +442,20 @@ export default function AnimeDetails() {
       </div>
     );
   }
-
   if (error) {
     return (
       <div className="flex justify-center items-center h-screen w-full flex-col gap-4">
         <h2 className="text-2xl font-bold text-white">Failed to load anime details</h2>
         <p className="text-white/80">{error}</p>
-        <button 
+        <button
           onClick={() => window.history.back()}
-          className="px-4 py-2 bg-anime-card-bg border border-anime-border/10 rounded-lg text-white hover:bg-anime-card-hover transition duration-200"
+          className="px-4 py-2 bg-anime-card-bg border border-anime-border/10 rounded-lg text-white hover:bg-anime-card-hover transition"
         >
           Go Back
         </button>
       </div>
     );
   }
-
   if (!animeData) {
     return (
       <div className="flex justify-center items-center h-screen w-full">
@@ -373,122 +464,267 @@ export default function AnimeDetails() {
     );
   }
 
+  const info = animeData?.animeInfo || {};
+  const genres = getGenres(info);
+
+  // Provider first; fallback to TMDB if needed
+  const providerCast = normalizeCast(animeData);
+  const cast = providerCast.length ? providerCast : castFallback;
+
+  const providerSimilar = normalizeSimilar(animeData);
+  const similar =
+    providerSimilar.length ? providerSimilar : (resolvedSimilar.length ? resolvedSimilar : []);
+
+  const poster =
+    animeData?.poster ||
+    animeData?.cover ||
+    animeData?.banner ||
+    'https://placehold.co/600x900/141414/fff/?text=Poster&font=poppins';
+
   return (
     <div className="min-h-screen text-white">
       <AnimeHeader />
-      {showModal && (
-        <AnimeDetailsModal 
-          animeData={animeData} 
-          onClose={() => setShowModal(false)} 
-        />
-      )}
-      
-      <div className="flex flex-col xl:flex-row gap-4 w-full h-screen pt-20 p-4">
-        <div className="w-full h-full flex flex-col gap-4">
-          {/* Video Player */}
-          <div className="w-full h-full">
-            <iframe 
-              className="w-full h-[40rem] xl:h-full rounded-xl border border-anime-border/10" 
-              src={getIframeSrc()}
-              allowFullScreen
-            />
+
+      {/* Top bar */}
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 pt-20">
+        <div className="flex items-center justify-between gap-3">
+          <button
+            onClick={() => navigate(-1)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-md bg-anime-card-bg border border-anime-border/10 hover:bg-anime-card-hover active:scale-95 transition"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            <span>Back</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Hero (poster left, details right) */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 mt-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+          {/* Left: Poster */}
+          <div className="md:col-span-2">
+            <div className="rounded-2xl overflow-hidden border border-anime-border/10 bg-anime-card-bg md:sticky md:top-24">
+              <div className="aspect-[2/3] w-full">
+                <img
+                  src={poster}
+                  alt={animeData?.title}
+                  className="w-full h-full object-cover"
+                  loading="lazy"
+                />
+              </div>
+            </div>
           </div>
-          
-          <div className="w-full">
-            <div className="h-full flex flex-row gap-4">
-              {/* Anime Info */}
-              <div className="bg-anime-modal-bg border border-anime-border/10 rounded-xl w-full h-full p-6 flex flex-col justify-between gap-2">
-                <h2 className="text-3xl font-bold">{animeData.title}</h2>
-                <p className="text-white/80 overflow-hidden line-clamp-3 text-ellipsis mb-2">
-                  {animeData.animeInfo?.Overview || 'No description available'}
-                </p>
-                <button 
-                  onClick={() => setShowModal(true)}
-                  className="w-full py-2 bg-anime-card-bg border border-anime-border/10 rounded-lg text-center cursor-pointer hover:bg-anime-card-hover transition duration-200"
+
+          {/* Right: Details */}
+          <div className="md:col-span-3">
+            <div className="bg-anime-modal-bg border border-anime-border/10 rounded-2xl p-4 sm:p-6">
+              <h1 className="text-2xl sm:text-4xl font-bold">{animeData.title}</h1>
+
+              {/* Meta chips */}
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-white/80">
+                {info.Type && <span className="bg-white/10 px-2 py-1 rounded">{info.Type}</span>}
+                {info.Status && <span className="bg-white/10 px-2 py-1 rounded">{info.Status}</span>}
+                {info.Duration && <span className="bg-white/10 px-2 py-1 rounded">{info.Duration}</span>}
+                {episodesData?.episodes?.length > 0 && (
+                  <span className="bg-white/10 px-2 py-1 rounded">
+                    {episodesData.episodes.length} ep
+                  </span>
+                )}
+                {currentSeason && (
+                  <span className="bg-white/10 px-2 py-1 rounded">Season {currentSeason}</span>
+                )}
+              </div>
+
+              {/* Genres */}
+              {genres.length > 0 && (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {genres.slice(0, 12).map((g) => (
+                    <span
+                      key={g}
+                      className="text-xs bg-anime-badge-bg/60 border border-anime-badge-border/50 px-2 py-1 rounded-md"
+                    >
+                      {g}
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              {/* Overview */}
+              <p className="mt-4 text-sm sm:text-base text-white/80 leading-relaxed">
+                {info.Overview || animeData.description || 'No description available'}
+              </p>
+
+              {/* Actions */}
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                {firstEpisodeLink && (
+                  <Link
+                    to={firstEpisodeLink}
+                    className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-white text-black font-medium hover:bg-zinc-200 active:scale-95 transition"
+                  >
+                    <Play className="w-4 h-4" />
+                    Watch now
+                  </Link>
+                )}
+                <button
+                  onClick={() => toggleWatch(animeData)}
+                  aria-pressed={inWatchlist}
+                  className={`px-4 py-2 rounded-lg font-medium border transition
+                    ${
+                      inWatchlist
+                        ? 'bg-green-500/20 text-green-200 border-green-400/30 hover:bg-green-500/30'
+                        : 'bg-white/10 text-white border-white/15 hover:bg-white/20'
+                    }`}
                 >
-                  More info
+                  {inWatchlist ? 'In Watchlist' : 'Add to Watchlist'}
                 </button>
               </div>
-              
-              {/* Servers */}
-              <div className="w-[45rem] bg-anime-modal-bg border border-anime-border/10 rounded-xl h-full p-4 overflow-y-auto">
-                <div className="flex flex-col gap-2">
-                  {/* SUB Section */}
-                  <div className="flex items-center w-full">
-                    <div className="flex-grow h-px bg-anime-border/10"></div>
-                    <span className="px-2 text-sm text-anime-border/50">SUB</span>
-                    <div className="flex-grow h-px bg-anime-border/10"></div>
+            </div>
+
+            {/* Inline Info panel */}
+            <div className="mt-4 bg-anime-modal-bg border border-anime-border/10 rounded-2xl p-4 sm:p-6">
+              <h2 className="text-lg font-semibold mb-3">Info</h2>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-y-3 gap-x-6 text-sm">
+                {info.Title && (
+                  <div>
+                    <div className="text-white/60">Original Title</div>
+                    <div className="text-white">{info.Title}</div>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {animeSources.map((source) => (
-                      <button
-                        key={`${source.id}-sub`}
-                        onClick={() => handleServerClick(source.id, 'sub')}
-                        className={`${
-                          source.id === currentSource.id && currentLanguage === 'sub' 
-                            ? '!bg-white text-anime-card-bg' 
-                            : 'bg-anime-card-bg'
-                        } border border-anime-border/10 rounded-lg px-2 py-1 text-center text-sm cursor-pointer hover:bg-anime-card-hover transition duration-200 active:scale-90`}
-                      >
-                        {source.name}
-                      </button>
-                    ))}
+                )}
+                {info.Aired && (
+                  <div>
+                    <div className="text-white/60">Aired</div>
+                    <div className="text-white">{info.Aired}</div>
                   </div>
-                  
-                  {/* DUB Section */}
-                  <div className="flex items-center w-full mt-2">
-                    <div className="flex-grow h-px bg-anime-border/10"></div>
-                    <span className="px-2 text-sm text-anime-border/50">DUB</span>
-                    <div className="flex-grow h-px bg-anime-border/10"></div>
+                )}
+                {info.Studios && (
+                  <div>
+                    <div className="text-white/60">Studios</div>
+                    <div className="text-white">
+                      {Array.isArray(info.Studios) ? info.Studios.join(', ') : info.Studios}
+                    </div>
                   </div>
-                  <div className="grid grid-cols-3 gap-2">
-                    {animeSources.map((source) => (
-                      <button
-                        key={`${source.id}-dub`}
-                        onClick={() => handleServerClick(source.id, 'dub')}
-                        className={`${
-                          source.id === currentSource.id && currentLanguage === 'dub' 
-                            ? '!bg-white text-anime-card-bg' 
-                            : 'bg-anime-card-bg'
-                        } border border-anime-border/10 rounded-lg px-2 py-1 text-center text-sm cursor-pointer hover:bg-anime-card-hover transition duration-200 active:scale-90`}
-                      >
-                        {source.name}
-                      </button>
-                    ))}
+                )}
+                {info.Producer && (
+                  <div>
+                    <div className="text-white/60">Producers</div>
+                    <div className="text-white">
+                      {Array.isArray(info.Producer) ? info.Producer.join(', ') : info.Producer}
+                    </div>
                   </div>
-                </div>
+                )}
+                {(info.Score || info.Rating) && (
+                  <div>
+                    <div className="text-white/60">Rating</div>
+                    <div className="text-white">{info.Score || info.Rating}</div>
+                  </div>
+                )}
+                {info.Season && (
+                  <div>
+                    <div className="text-white/60">Season</div>
+                    <div className="text-white">{info.Season}</div>
+                  </div>
+                )}
+                {info.Year && (
+                  <div>
+                    <div className="text-white/60">Year</div>
+                    <div className="text-white">{info.Year}</div>
+                  </div>
+                )}
+                {info.Source && (
+                  <div>
+                    <div className="text-white/60">Source</div>
+                    <div className="text-white">{info.Source}</div>
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
-        
-        {/* Episodes Sidebar */}
-        <div className="bg-anime-modal-bg w-full xl:w-[45rem] h-full rounded-xl border border-anime-border/10 p-4 overflow-y-auto">
-          <div className="flex justify-between items-center mb-4">
-            <h2 className="text-2xl font-bold">Episodes</h2>
-            {animeData.seasons && animeData.seasons.length > 1 && (
-              <div className="relative">
-                <select 
-                  className="appearance-none bg-anime-card-bg border border-anime-border/10 rounded-lg px-4 py-2 pr-8 text-white cursor-pointer outline-none hover:bg-anime-card-hover transition duration-200"
-                  defaultValue=""
-                  onChange={(e) => handleSeasonChange(e.target.value)}
-                >
-                  {renderSeasonOptions(animeData.seasons)}
-                </select>
-                <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-white">
-                  <svg className="fill-current h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
-                    <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z"/>
-                  </svg>
+      </section>
+
+      {/* Body */}
+      <section className="max-w-6xl mx-auto px-4 sm:px-6 mt-6 pb-12 space-y-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          {/* Episodes & Seasons */}
+          <div className="lg:col-span-2 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-xl font-semibold">Episodes</h2>
+              {animeData.seasons && animeData.seasons.length > 1 && (
+                <div className="relative">
+                  <select
+                    className="appearance-none bg-anime-card-bg border border-anime-border/10 rounded-lg px-4 py-2 pr-8 text-white cursor-pointer outline-none hover:bg-anime-card-hover transition"
+                    defaultValue=""
+                    onChange={(e) => handleSeasonChange(e.target.value)}
+                  >
+                    {animeData.seasons.map((season, i) => (
+                      <option key={i} value={season.route}>{season.name}</option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-white">
+                    <svg className="fill-current h-4 w-4" viewBox="0 0 20 20">
+                      <path d="M9.293 12.95l.707.707L15.657 8l-1.414-1.414L10 10.828 5.757 6.586 4.343 8z" />
+                    </svg>
+                  </div>
                 </div>
-              </div>
-            )}
+              )}
+            </div>
+            {renderEpisodes(episodesData?.episodes || [])}
           </div>
-          
-          <div className="space-y-4">
-            {renderEpisodesList(episodesData?.episodes || [])}
+
+          {/* Right rail */}
+          <div className="space-y-6">
+            {/* Cast / Characters */}
+            <div className="bg-anime-modal-bg border border-anime-border/10 rounded-2xl p-4">
+              <h3 className="text-lg font-semibold mb-3">Cast / Characters</h3>
+              {cast.length > 0 ? (
+                <div className="flex gap-4 overflow-x-auto no-scrollbar pb-1">
+                  {cast.slice(0, 20).map((c, idx) => (
+                    <div key={c._k || idx} className="min-w-[110px]">
+                      <div className="w-[110px] h-[150px] bg-anime-card-bg rounded-lg overflow-hidden">
+                        <img
+                          src={
+                            c.image ||
+                            'https://placehold.co/220x300/141414/fff/?text=Cast&font=poppins'
+                          }
+                          alt={c.name || c.character || 'Character'}
+                          className="w-full h-full object-cover"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="mt-2 text-xs">
+                        <div className="font-medium line-clamp-2">{c.name || c.character}</div>
+                        {(c.role || c.character) && (
+                          <div className="text-white/60 line-clamp-1">{c.role || c.character}</div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-white/60 text-sm">No cast information available.</div>
+              )}
+            </div>
+
+            {/* Similar */}
+            <div className="bg-anime-modal-bg border border-anime-border/10 rounded-2xl p-4">
+              <div className="flex items-center justify-between mb-3">
+                <h3 className="text-lg font-semibold">Similar</h3>
+              </div>
+              {similar.length > 0 ? (
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                  {similar.slice(0, 9).map((a) => (
+                    <AnimeCard key={a.id} animeData={a} />
+                  ))}
+                </div>
+              ) : resolvingSimilar ? (
+                <div className="text-white/60 text-sm">Loading similar…</div>
+              ) : (
+                <div className="text-white/60 text-sm">No similar titles yet.</div>
+              )}
+            </div>
           </div>
         </div>
-      </div>
+      </section>
     </div>
   );
 }

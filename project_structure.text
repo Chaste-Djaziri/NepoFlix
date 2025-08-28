@@ -4,8 +4,8 @@
 - LICENSE
 - README.md
 - api
-  - m3u8proxy.ts
-  - proxy.ts
+  - m3u8proxy.js
+  - proxy.js
 - backend
   - m3u8proxy
     - .gitignore
